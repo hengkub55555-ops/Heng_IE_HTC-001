@@ -1,0 +1,6 @@
+{
+  "name": "IE Manpower Master & Capacity Planner",
+  "description": "ระบบคำนวณและวางแผนกำลังคน (Manpower) มาตรฐานวิศวกรรมอุตสาหการ (IE) พร้อมระบบ Forecast รายเดือน วิเคราะห์คอขวด และเปรียบเทียบ Plan vs Actual",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
