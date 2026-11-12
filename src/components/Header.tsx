@@ -12,6 +12,7 @@ import {
   Layers,
   ChevronDown,
   Check,
+  Cloud,
 } from 'lucide-react';
 import { LineId, LineData, LineSummaryMetrics } from '../types/manpower';
 import { ALL_LINES_METADATA } from '../data/initialData';
@@ -31,6 +32,9 @@ interface HeaderProps {
   activeLineId: LineId | string;
   setActiveLineId: (lineId: any) => void;
   onOpenExport: () => void;
+  onOpenGoogleDrive: () => void;
+  isDriveConnected?: boolean;
+  userEmail?: string | null;
   onResetData: () => void;
   lines?: Record<string, LineData>;
   lineSummaries?: Record<string, LineSummaryMetrics>;
@@ -46,6 +50,9 @@ export const Header: React.FC<HeaderProps> = ({
   activeLineId,
   setActiveLineId,
   onOpenExport,
+  onOpenGoogleDrive,
+  isDriveConnected = false,
+  userEmail,
   onResetData,
   lines,
   lineSummaries,
@@ -335,6 +342,32 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Zone 3: Primary Actions */}
         <div className="flex items-center gap-2 self-end xl:self-auto">
+          {/* Google Drive Persistent Backup Button */}
+          <button
+            onClick={onOpenGoogleDrive}
+            title={
+              isDriveConnected
+                ? `เชื่อมต่อกับ Google Drive (${userEmail || 'Active'}) - คลิกเพื่อสำรองหรือกู้คืนข้อมูล`
+                : 'เชื่อมต่อ Google Drive เพื่อสำรองข้อมูลถาวร'
+            }
+            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all flex items-center gap-1.5 cursor-pointer shadow-sm border ${
+              isDriveConnected
+                ? 'bg-emerald-950/80 hover:bg-emerald-900 border-emerald-500/50 text-emerald-300'
+                : 'bg-slate-900 hover:bg-slate-800 border-cyan-500/40 text-cyan-300'
+            }`}
+          >
+            <Cloud className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">
+              {isDriveConnected ? 'Google Drive (ซิงค์แล้ว)' : 'Google Drive สำรองข้อมูล'}
+            </span>
+            <span className="sm:hidden">Drive</span>
+            <span
+              className={`w-2 h-2 rounded-full ${
+                isDriveConnected ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'
+              }`}
+            ></span>
+          </button>
+
           <button
             onClick={onResetData}
             title="รีเซ็ตเป็นข้อมูลมาตรฐาน (Reset to Default)"

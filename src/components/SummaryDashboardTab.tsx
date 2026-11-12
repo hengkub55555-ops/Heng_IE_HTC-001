@@ -34,6 +34,7 @@ import {
   ChevronUp,
   RefreshCw,
   Factory,
+  Cloud,
 } from 'lucide-react';
 
 interface SummaryDashboardTabProps {
@@ -44,6 +45,8 @@ interface SummaryDashboardTabProps {
   setPlanVsActualRecords: React.Dispatch<React.SetStateAction<PlanVsActualRecord[]>>;
   onSelectLine: (lineId: string, targetTab?: any) => void;
   onSaveAll: () => void;
+  onOpenGoogleDrive?: () => void;
+  isDriveConnected?: boolean;
 }
 
 export const SummaryDashboardTab: React.FC<SummaryDashboardTabProps> = ({
@@ -54,6 +57,8 @@ export const SummaryDashboardTab: React.FC<SummaryDashboardTabProps> = ({
   setPlanVsActualRecords,
   onSelectLine,
   onSaveAll,
+  onOpenGoogleDrive,
+  isDriveConnected = false,
 }) => {
   const [saveToast, setSaveToast] = useState(false);
   const [showDetailedMatrix, setShowDetailedMatrix] = useState(true);
@@ -419,7 +424,27 @@ export const SummaryDashboardTab: React.FC<SummaryDashboardTabProps> = ({
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2.5">
+          {onOpenGoogleDrive && (
+            <button
+              onClick={onOpenGoogleDrive}
+              className={`px-3.5 py-2 text-xs font-semibold rounded-lg transition-all shadow-sm flex items-center gap-1.5 cursor-pointer border ${
+                isDriveConnected
+                  ? 'bg-emerald-950/70 hover:bg-emerald-900 border-emerald-500/50 text-emerald-300'
+                  : 'bg-slate-900 hover:bg-slate-850 border-cyan-500/40 text-cyan-300'
+              }`}
+              title="สำรองข้อมูลและกู้คืนผ่าน Google Drive"
+            >
+              <Cloud className="w-4 h-4" />
+              <span>{isDriveConnected ? 'Google Drive (เชื่อมต่อแล้ว)' : 'สำรองข้อมูล Google Drive'}</span>
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  isDriveConnected ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'
+                }`}
+              ></span>
+            </button>
+          )}
+
           {saveToast && (
             <div className="flex items-center gap-1.5 text-xs text-emerald-400 bg-emerald-950/70 border border-emerald-500/40 px-3 py-1.5 rounded-lg animate-in fade-in">
               <CheckCircle2 className="w-3.5 h-3.5" />

@@ -32,11 +32,46 @@ import { PlanVsActualTab } from './components/PlanVsActualTab';
 import { LineBalanceTab } from './components/LineBalanceTab';
 import { IEGuideTab } from './components/IEGuideModal';
 import { ExportModal } from './components/ExportModal';
+import { GoogleDriveBackupModal } from './components/GoogleDriveBackupModal';
+import { User } from 'firebase/auth';
+import { initAuth, getAccessToken } from './services/googleAuth';
+import { createDriveBackup } from './services/googleDriveService';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
   const [activeLineId, setActiveLineId] = useState<LineId>('line-b');
   const [isExportOpen, setIsExportOpen] = useState(false);
+  const [isDriveModalOpen, setIsDriveModalOpen] = useState(false);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [autoSaveEnabled, setAutoSaveEnabled] = useState<boolean>(() => {
+    return localStorage.getItem('ie_drive_autosave') !== 'false';
+  });
+  const [lastSyncedTime, setLastSyncedTime] = useState<string | null>(() => {
+    return localStorage.getItem('ie_drive_last_synced') || null;
+  });
+
+  // Track Google Auth on app load
+  useEffect(() => {
+    const unsubscribe = initAuth(
+      (user) => {
+        setCurrentUser(user);
+      },
+      () => {
+        setCurrentUser(null);
+      }
+    );
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem('ie_drive_autosave', String(autoSaveEnabled));
+  }, [autoSaveEnabled]);
+
+  useEffect(() => {
+    if (lastSyncedTime) {
+      localStorage.setItem('ie_drive_last_synced', lastSyncedTime);
+    }
+  }, [lastSyncedTime]);
 
   // All 7 process lines package (Line A, Line B, Door A, Door B, Door C, Injection Inhouse, Thermoforming)
   const [lines, setLines] = useState<Record<string, LineData>>(() => {
@@ -200,10 +235,39 @@ export default function App() {
     });
   };
 
-  // Explicit Save All trigger
-  const handleSaveAll = () => {
+  // Explicit Save All trigger (Local storage + Google Drive Auto-Sync)
+  const handleSaveAll = async () => {
     localStorage.setItem('ie_multilines_v4', JSON.stringify(lines));
     localStorage.setItem('ie_pva_records_v4', JSON.stringify(planVsActualRecords));
+
+    // If Google Drive auto-save is enabled and user is logged in, perform background master update
+    if (autoSaveEnabled && currentUser) {
+      try {
+        const token = await getAccessToken();
+        if (token) {
+          const payload = {
+            app: 'IE Manpower Master & Capacity Planner',
+            version: '4.0.0',
+            exportedAt: new Date().toISOString(),
+            exportedBy: currentUser.email || 'Anonymous',
+            lineCount: Object.keys(lines).length,
+            lines,
+            planVsActualRecords,
+            summaryInfo: {
+              totalDl: plantSummary.totalPlantDl,
+              totalIdl: plantSummary.totalPlantIdl,
+              grandTotalMp: plantSummary.grandPlantTotalMp,
+            },
+            notes: 'Auto-sync from Save Changes',
+          };
+          await createDriveBackup(payload, 'IE_Manpower_Master.json');
+          const nowStr = new Date().toLocaleTimeString('th-TH');
+          setLastSyncedTime(nowStr);
+        }
+      } catch (err) {
+        console.warn('Auto-save to Google Drive skipped or failed:', err);
+      }
+    }
   };
 
   // Reset to default dataset
@@ -240,6 +304,9 @@ export default function App() {
         activeLineId={activeLineId}
         setActiveLineId={setActiveLineId}
         onOpenExport={() => setIsExportOpen(true)}
+        onOpenGoogleDrive={() => setIsDriveModalOpen(true)}
+        isDriveConnected={!!currentUser}
+        userEmail={currentUser?.email}
         onResetData={handleResetData}
         lines={lines}
         lineSummaries={allLineSummaries}
@@ -278,6 +345,8 @@ export default function App() {
             setPlanVsActualRecords={setPlanVsActualRecords}
             onSelectLine={handleSelectLineFromDashboard}
             onSaveAll={handleSaveAll}
+            onOpenGoogleDrive={() => setIsDriveModalOpen(true)}
+            isDriveConnected={!!currentUser}
           />
         )}
 
@@ -357,6 +426,23 @@ export default function App() {
         activeLineId={activeLineId}
         plantSummary={plantSummary}
         planVsActualRecords={planVsActualRecords}
+      />
+
+      {/* Google Drive Persistent Backup & Restore Modal */}
+      <GoogleDriveBackupModal
+        isOpen={isDriveModalOpen}
+        onClose={() => setIsDriveModalOpen(false)}
+        lines={lines}
+        setLines={setLines}
+        planVsActualRecords={planVsActualRecords}
+        setPlanVsActualRecords={setPlanVsActualRecords}
+        plantSummary={plantSummary}
+        currentUser={currentUser}
+        setCurrentUser={setCurrentUser}
+        autoSaveEnabled={autoSaveEnabled}
+        setAutoSaveEnabled={setAutoSaveEnabled}
+        lastSyncedTime={lastSyncedTime}
+        setLastSyncedTime={setLastSyncedTime}
       />
 
       {/* Footer */}
