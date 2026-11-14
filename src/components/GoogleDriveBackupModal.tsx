@@ -14,10 +14,8 @@ import {
   HardDrive,
   ShieldCheck,
   LogOut,
-  Sparkles,
   Database,
   ArrowRight,
-  Sliders,
 } from 'lucide-react';
 import { User } from 'firebase/auth';
 import {
@@ -29,14 +27,18 @@ import {
 import {
   listDriveBackups,
   createDriveBackup,
-  updateDriveBackup,
+  upsertMasterDriveBackup,
   downloadDriveBackup,
   deleteDriveBackup,
   DriveBackupMetadata,
   IEManpowerBackupPayload,
 } from '../services/googleDriveService';
-import { LineData, PlanVsActualRecord, PlantSummaryMetrics } from '../types/manpower';
-import { formatNumber } from '../utils/ieCalculations';
+import {
+  LineData,
+  PlanVsActualRecord,
+  PlantSummaryMetrics,
+  VsmNodeConfig,
+} from '../types/manpower';
 
 interface GoogleDriveBackupModalProps {
   isOpen: boolean;
@@ -45,6 +47,8 @@ interface GoogleDriveBackupModalProps {
   setLines: React.Dispatch<React.SetStateAction<Record<string, LineData>>>;
   planVsActualRecords: PlanVsActualRecord[];
   setPlanVsActualRecords: React.Dispatch<React.SetStateAction<PlanVsActualRecord[]>>;
+  vsmPlan: VsmNodeConfig[];
+  setVsmPlan: React.Dispatch<React.SetStateAction<VsmNodeConfig[]>>;
   plantSummary: PlantSummaryMetrics;
   currentUser: User | null;
   setCurrentUser: (user: User | null) => void;
@@ -61,6 +65,8 @@ export const GoogleDriveBackupModal: React.FC<GoogleDriveBackupModalProps> = ({
   setLines,
   planVsActualRecords,
   setPlanVsActualRecords,
+  vsmPlan,
+  setVsmPlan,
   plantSummary,
   currentUser,
   setCurrentUser,
@@ -82,6 +88,8 @@ export const GoogleDriveBackupModal: React.FC<GoogleDriveBackupModalProps> = ({
   // Confirmation modals
   const [confirmRestoreFile, setConfirmRestoreFile] = useState<DriveBackupMetadata | null>(null);
   const [confirmDeleteFile, setConfirmDeleteFile] = useState<DriveBackupMetadata | null>(null);
+  const [confirmUpdateMaster, setConfirmUpdateMaster] = useState(false);
+  const [confirmEnableDriveAutoSync, setConfirmEnableDriveAutoSync] = useState(false);
 
   // Monitor auth status
   useEffect(() => {
@@ -156,12 +164,13 @@ export const GoogleDriveBackupModal: React.FC<GoogleDriveBackupModalProps> = ({
     const lineKeys = Object.keys(lines);
     return {
       app: 'IE Manpower Master & Capacity Planner',
-      version: '4.0.0',
+      version: '4.1.0',
       exportedAt: new Date().toISOString(),
       exportedBy: currentUser?.email || 'Anonymous',
       lineCount: lineKeys.length,
       lines,
       planVsActualRecords,
+      vsmPlan,
       summaryInfo: {
         totalDl: plantSummary.totalPlantDl,
         totalIdl: plantSummary.totalPlantIdl,
@@ -171,27 +180,29 @@ export const GoogleDriveBackupModal: React.FC<GoogleDriveBackupModalProps> = ({
     };
   };
 
-  // Create new backup file on Google Drive
+  // Create new backup file or update Master file in place on Google Drive
   const handleSaveToDrive = async (isMaster: boolean = false) => {
     setIsSaving(true);
     setStatusMessage(null);
     try {
       const payload = buildPayload();
-      const fileName = isMaster
-        ? 'IE_Manpower_Master.json'
-        : customName.trim()
-        ? customName.trim()
-        : undefined;
-
-      const created = await createDriveBackup(payload, fileName);
+      const created = isMaster
+        ? await upsertMasterDriveBackup(payload, 'IE_Manpower_Master.json')
+        : await createDriveBackup(
+            payload,
+            customName.trim() ? customName.trim() : undefined
+          );
       const nowStr = new Date().toLocaleTimeString('th-TH');
       setLastSyncedTime(nowStr);
       setStatusMessage({
-        text: `สำรองข้อมูลสำเร็จ! ไฟล์ "${created.name}" ถูกบันทึกลงใน Google Drive ของคุณเรียบร้อยแล้ว`,
+        text: isMaster
+          ? `อัปเดตไฟล์ Master "${created.name}" บน Google Drive เรียบร้อยแล้ว`
+          : `สำรองข้อมูลสำเร็จ! ไฟล์ "${created.name}" ถูกบันทึกลงใน Google Drive ของคุณเรียบร้อยแล้ว`,
         type: 'success',
       });
       setCustomName('');
       setBackupNote('');
+      setConfirmUpdateMaster(false);
       await fetchBackupList();
     } catch (err: any) {
       console.error(err);
@@ -219,17 +230,23 @@ export const GoogleDriveBackupModal: React.FC<GoogleDriveBackupModalProps> = ({
       if (Array.isArray(payload.planVsActualRecords)) {
         setPlanVsActualRecords(payload.planVsActualRecords);
       }
+      if (Array.isArray(payload.vsmPlan)) {
+        setVsmPlan(payload.vsmPlan);
+      }
 
       // Update LocalStorage for safety
       localStorage.setItem('ie_multilines_v4', JSON.stringify(payload.lines));
       if (Array.isArray(payload.planVsActualRecords)) {
         localStorage.setItem('ie_pva_records_v4', JSON.stringify(payload.planVsActualRecords));
       }
+      if (Array.isArray(payload.vsmPlan)) {
+        localStorage.setItem('ie_vsm_plan_v4', JSON.stringify(payload.vsmPlan));
+      }
 
       const nowStr = new Date().toLocaleTimeString('th-TH');
       setLastSyncedTime(nowStr);
       setStatusMessage({
-        text: `กู้คืนข้อมูลสำเร็จ! ข้อมูลสายการผลิต (${Object.keys(payload.lines).length} ไลน์) ถูกโหลดมาใช้งานในระบบแล้ว`,
+        text: `กู้คืนข้อมูลสำเร็จ! ข้อมูลสายการผลิต (${Object.keys(payload.lines).length} ไลน์${Array.isArray(payload.vsmPlan) ? ' + แผน VSM' : ''}) ถูกโหลดมาใช้งานในระบบแล้ว`,
         type: 'success',
       });
       setConfirmRestoreFile(null);
@@ -423,18 +440,26 @@ export const GoogleDriveBackupModal: React.FC<GoogleDriveBackupModalProps> = ({
 
             {/* Auto-Save Toggle */}
             {currentUser && token && (
-              <div className="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between text-xs">
-                <div className="flex items-center gap-2">
-                  <span className="text-slate-300 font-medium">โหมดบันทึกอัตโนมัติ (Auto-Sync to Google Drive):</span>
+              <div className="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between gap-3 text-xs">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2">
+                  <span className="text-slate-200 font-medium">
+                    ซิงค์การแก้ไขอัตโนมัติขึ้น Google Drive (Auto-Sync Master):
+                  </span>
                   <span className="text-[11px] text-slate-400">
-                    เมื่อคุณกดบันทึกข้อมูลในระบบ ระบบจะอัปเดตไฟล์ Master บน Google Drive โดยอัตโนมัติ
+                    เมื่อแก้ไขข้อมูล ระบบจะอัปเดตไฟล์ IE_Manpower_Master.json บน Drive อัตโนมัติ (หน่วง 2.5 วินาที)
                   </span>
                 </div>
-                <label className="relative inline-flex items-center cursor-pointer">
+                <label className="relative inline-flex items-center cursor-pointer shrink-0">
                   <input
                     type="checkbox"
                     checked={autoSaveEnabled}
-                    onChange={(e) => setAutoSaveEnabled(e.target.checked)}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setConfirmEnableDriveAutoSync(true);
+                      } else {
+                        setAutoSaveEnabled(false);
+                      }
+                    }}
                     className="sr-only peer"
                   />
                   <div className="w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-cyan-500"></div>
@@ -499,13 +524,13 @@ export const GoogleDriveBackupModal: React.FC<GoogleDriveBackupModalProps> = ({
               </button>
 
               <button
-                onClick={() => handleSaveToDrive(true)}
+                onClick={() => setConfirmUpdateMaster(true)}
                 disabled={!token || isSaving}
                 className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-cyan-300 font-semibold text-xs border border-slate-700 hover:border-cyan-500/50 rounded-xl transition-all flex items-center gap-2 cursor-pointer disabled:opacity-40"
-                title="บันทึกทับลงในไฟล์หลัก IE_Manpower_Master.json"
+                title="อัปเดตทับไฟล์หลัก IE_Manpower_Master.json บน Google Drive"
               >
                 <Database className="w-4 h-4 text-cyan-400" />
-                <span>บันทึกเป็นไฟล์ Master (IE_Manpower_Master.json)</span>
+                <span>อัปเดตไฟล์ Master (IE_Manpower_Master.json)</span>
               </button>
 
               <button
@@ -755,6 +780,84 @@ export const GoogleDriveBackupModal: React.FC<GoogleDriveBackupModalProps> = ({
               >
                 <Trash2 className="w-4 h-4" />
                 <span>ยืนยันลบไฟล์ (Delete Permanently)</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* EXPLICIT CONFIRMATION MODAL: OVERWRITE MASTER FILE ON DRIVE    */}
+      {/* ============================================================== */}
+      {confirmUpdateMaster && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-950/90 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-cyan-500/50 rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4">
+            <div className="flex items-center gap-3 text-cyan-400">
+              <div className="w-10 h-10 rounded-full bg-cyan-500/20 border border-cyan-500/40 flex items-center justify-center">
+                <Database className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="text-base font-bold text-white">ยืนยันการอัปเดตไฟล์ Master</h4>
+                <p className="text-xs text-cyan-300">IE_Manpower_Master.json บน Google Drive</p>
+              </div>
+            </div>
+            <p className="text-xs text-slate-300 leading-relaxed font-sans">
+              หากมีไฟล์ <span className="font-mono text-white">IE_Manpower_Master.json</span> อยู่บน Google Drive แล้ว ระบบจะเขียนทับไฟล์เดิมด้วยข้อมูลล่าสุด (7 Process Lines + Plan vs Actual + แผน VSM) เพื่อไม่ให้เกิดไฟล์ซ้ำซ้อน ต้องการดำเนินการต่อหรือไม่?
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                onClick={() => setConfirmUpdateMaster(false)}
+                disabled={isSaving}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
+              >
+                ยกเลิก
+              </button>
+              <button
+                onClick={() => handleSaveToDrive(true)}
+                disabled={isSaving}
+                className="px-4 py-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                <Database className="w-4 h-4" />
+                <span>{isSaving ? 'กำลังอัปเดต...' : 'ยืนยันอัปเดตไฟล์ Master'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* EXPLICIT CONFIRMATION MODAL: ENABLE DRIVE AUTO-SYNC            */}
+      {/* ============================================================== */}
+      {confirmEnableDriveAutoSync && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-950/90 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-amber-500/50 rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4">
+            <div className="flex items-center gap-3 text-amber-400">
+              <div className="w-10 h-10 rounded-full bg-amber-500/20 border border-amber-500/40 flex items-center justify-center">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="text-base font-bold text-white">เปิดใช้งาน Auto-Sync ขึ้น Google Drive?</h4>
+                <p className="text-xs text-amber-300">อนุญาตให้อัปเดตไฟล์ Master อัตโนมัติหลังแก้ไข</p>
+              </div>
+            </div>
+            <p className="text-xs text-slate-300 leading-relaxed font-sans">
+              เมื่อเปิดโหมดนี้ ทุกครั้งที่คุณแก้ไขข้อมูลในหน้า Master, Forecast, Plan vs Actual หรือ VSM และเปิดโหมดบันทึกอัตโนมัติไว้ ระบบจะเขียนอัปเดตลงในไฟล์ <span className="font-mono text-white">IE_Manpower_Master.json</span> บน Google Drive ของคุณโดยอัตโนมัติ (หน่วงเวลา 2.5 วินาทีหลังหยุดพิมพ์)
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                onClick={() => setConfirmEnableDriveAutoSync(false)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
+              >
+                ยกเลิก
+              </button>
+              <button
+                onClick={() => {
+                  setAutoSaveEnabled(true);
+                  setConfirmEnableDriveAutoSync(false);
+                }}
+                className="px-4 py-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 rounded-xl text-xs font-bold transition-all shadow-md cursor-pointer"
+              >
+                ยืนยันเปิด Auto-Sync
               </button>
             </div>
           </div>

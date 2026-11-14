@@ -1,4 +1,4 @@
-import { LineData, PlanVsActualRecord } from '../types/manpower';
+import { LineData, PlanVsActualRecord, VsmNodeConfig } from '../types/manpower';
 import { getAccessToken } from './googleAuth';
 
 export interface DriveBackupMetadata {
@@ -19,6 +19,7 @@ export interface IEManpowerBackupPayload {
   lineCount: number;
   lines: Record<string, LineData>;
   planVsActualRecords: PlanVsActualRecord[];
+  vsmPlan?: VsmNodeConfig[];
   summaryInfo?: {
     totalDl: number;
     totalIdl: number;
@@ -194,3 +195,49 @@ export async function deleteDriveBackup(fileId: string): Promise<void> {
     throw new Error(errorData.error?.message || `เกิดข้อผิดพลาดในการลบไฟล์ (${response.status})`);
   }
 }
+
+/**
+ * Find existing Master backup file by exact name and update it, or create a new one
+ */
+let cachedMasterFileId: string | null = null;
+
+export async function upsertMasterDriveBackup(
+  payload: IEManpowerBackupPayload,
+  masterFileName: string = 'IE_Manpower_Master.json'
+): Promise<DriveBackupMetadata> {
+  const token = await getAccessToken();
+  if (!token) {
+    throw new Error('กรุณาลงชื่อเข้าใช้ Google เพื่อซิงค์ข้อมูล');
+  }
+
+  if (cachedMasterFileId) {
+    try {
+      return await updateDriveBackup(cachedMasterFileId, payload);
+    } catch {
+      cachedMasterFileId = null;
+    }
+  }
+
+  const query = encodeURIComponent(`name = '${masterFileName}' and trashed = false`);
+  const fields = encodeURIComponent('files(id, name)');
+  const searchRes = await fetch(`${DRIVE_API_URL}?q=${query}&fields=${fields}&pageSize=5`, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (searchRes.ok) {
+    const searchData = await searchRes.json();
+    const existing = searchData.files?.[0];
+    if (existing?.id) {
+      cachedMasterFileId = existing.id;
+      return await updateDriveBackup(existing.id, payload);
+    }
+  }
+
+  const created = await createDriveBackup(payload, masterFileName);
+  cachedMasterFileId = created.id;
+  return created;
+}
+

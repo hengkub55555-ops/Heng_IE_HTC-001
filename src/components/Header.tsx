@@ -13,6 +13,11 @@ import {
   ChevronDown,
   Check,
   Cloud,
+  Workflow,
+  Save,
+  CheckCircle2,
+  RefreshCw,
+  AlertCircle,
 } from 'lucide-react';
 import { LineId, LineData, LineSummaryMetrics } from '../types/manpower';
 import { ALL_LINES_METADATA } from '../data/initialData';
@@ -20,6 +25,7 @@ import { ALL_LINES_METADATA } from '../data/initialData';
 export type ActiveTab =
   | 'dashboard'
   | 'summary'
+  | 'vsm'
   | 'master'
   | 'forecast'
   | 'plan_vs_actual'
@@ -36,6 +42,11 @@ interface HeaderProps {
   isDriveConnected?: boolean;
   userEmail?: string | null;
   onResetData: () => void;
+  autoSaveEdits: boolean;
+  onToggleAutoSaveEdits: () => void;
+  saveStatus: 'saved' | 'saving' | 'unsaved' | 'error';
+  lastSavedTime: string | null;
+  onManualSave: () => void;
   lines?: Record<string, LineData>;
   lineSummaries?: Record<string, LineSummaryMetrics>;
   lineAName?: string;
@@ -54,6 +65,11 @@ export const Header: React.FC<HeaderProps> = ({
   isDriveConnected = false,
   userEmail,
   onResetData,
+  autoSaveEdits,
+  onToggleAutoSaveEdits,
+  saveStatus,
+  lastSavedTime,
+  onManualSave,
   lines,
   lineSummaries,
   lineAName = 'RF Production Line A',
@@ -67,7 +83,7 @@ export const Header: React.FC<HeaderProps> = ({
     window.print();
   };
 
-  const navItems: { id: ActiveTab; label: string; badge?: string; icon: React.ReactNode }[] = [
+  const navItems: { id: ActiveTab; label: string; icon: React.ReactNode }[] = [
     {
       id: 'dashboard',
       label: 'Dashboard รวม',
@@ -76,8 +92,12 @@ export const Header: React.FC<HeaderProps> = ({
     {
       id: 'summary',
       label: 'สรุป Manpower (7 Lines)',
-      badge: 'NEW',
       icon: <Layers className="w-4 h-4 mr-1.5 inline text-cyan-400" />,
+    },
+    {
+      id: 'vsm',
+      label: 'VSM แผนส่ง Part',
+      icon: <Workflow className="w-4 h-4 mr-1.5 inline text-emerald-400" />,
     },
     {
       id: 'master',
@@ -145,6 +165,8 @@ export const Header: React.FC<HeaderProps> = ({
                     ? 'Plant Overview (7 Lines)'
                     : activeTab === 'summary'
                     ? 'สรุป Manpower ทุก Process Line'
+                    : activeTab === 'vsm'
+                    ? 'Value Stream Mapping (TF / Inj / Door → A & B)'
                     : currentMeta.name}
                 </span>
                 <span aria-hidden="true" className="text-slate-600">·</span>
@@ -322,7 +344,7 @@ export const Header: React.FC<HeaderProps> = ({
               <button
                 key={item.id}
                 onClick={() => setActiveTab(item.id)}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all whitespace-nowrap flex items-center cursor-pointer ${
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all whitespace-nowrap shrink-0 flex items-center cursor-pointer ${
                   isActive
                     ? 'bg-cyan-500 text-slate-950 font-semibold shadow-sm'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
@@ -330,18 +352,75 @@ export const Header: React.FC<HeaderProps> = ({
               >
                 {item.icon}
                 <span>{item.label}</span>
-                {item.badge && !isActive && (
-                  <span className="ml-1.5 px-1 py-0.2 text-[9px] font-bold rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
-                    {item.badge}
-                  </span>
-                )}
               </button>
             );
           })}
         </nav>
 
-        {/* Zone 3: Primary Actions */}
-        <div className="flex items-center gap-2 self-end xl:self-auto">
+        {/* Zone 3: Primary Actions + Auto-Save Edits Control */}
+        <div className="flex flex-wrap items-center gap-2 self-end xl:self-auto">
+          {/* Auto-Save Edits Toggle & Status */}
+          <div className="flex items-center bg-slate-900 border border-slate-800 rounded-lg overflow-hidden shrink-0">
+            <button
+              onClick={onToggleAutoSaveEdits}
+              title={
+                autoSaveEdits
+                  ? 'โหมดบันทึกการแก้ไขอัตโนมัติกำลังเปิดอยู่ (คลิกเพื่อสลับเป็นบันทึกด้วยตนเอง)'
+                  : 'โหมดบันทึกการแก้ไขอัตโนมัติปิดอยู่ (คลิกเพื่อเปิด)'
+              }
+              className={`px-2.5 py-1.5 text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 cursor-pointer border-r border-slate-800 ${
+                autoSaveEdits
+                  ? 'bg-emerald-950/60 text-emerald-300 hover:bg-emerald-900/60'
+                  : 'bg-slate-900 text-slate-400 hover:text-white'
+              }`}
+            >
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${
+                  autoSaveEdits ? 'bg-emerald-400' : 'bg-slate-500'
+                }`}
+              />
+              <span>บันทึกอัตโนมัติ: {autoSaveEdits ? 'เปิด' : 'ปิด'}</span>
+            </button>
+
+            <button
+              onClick={onManualSave}
+              title="บันทึกข้อมูลทั้งหมดทันที"
+              className={`px-2.5 py-1.5 text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 cursor-pointer font-mono tabular-nums ${
+                saveStatus === 'saving'
+                  ? 'text-cyan-300 bg-cyan-950/40'
+                  : saveStatus === 'unsaved'
+                  ? 'text-amber-300 bg-amber-950/50 hover:bg-amber-900/50 font-sans font-semibold'
+                  : saveStatus === 'error'
+                  ? 'text-rose-300 bg-rose-950/50 hover:bg-rose-900/50 font-sans'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-800'
+              }`}
+            >
+              {saveStatus === 'saving' ? (
+                <>
+                  <RefreshCw className="w-3 h-3 animate-spin text-cyan-400" />
+                  <span className="font-sans">กำลังบันทึก...</span>
+                </>
+              ) : saveStatus === 'unsaved' ? (
+                <>
+                  <Save className="w-3 h-3 text-amber-400" />
+                  <span>ยังไม่บันทึก · กดเพื่อบันทึก</span>
+                </>
+              ) : saveStatus === 'error' ? (
+                <>
+                  <AlertCircle className="w-3 h-3 text-rose-400" />
+                  <span>ซิงค์ไม่สำเร็จ · ลองใหม่</span>
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                  <span className="font-sans">
+                    บันทึกแล้ว{lastSavedTime ? ` ${lastSavedTime}` : ''}
+                  </span>
+                </>
+              )}
+            </button>
+          </div>
+
           {/* Google Drive Persistent Backup Button */}
           <button
             onClick={onOpenGoogleDrive}
@@ -350,7 +429,7 @@ export const Header: React.FC<HeaderProps> = ({
                 ? `เชื่อมต่อกับ Google Drive (${userEmail || 'Active'}) - คลิกเพื่อสำรองหรือกู้คืนข้อมูล`
                 : 'เชื่อมต่อ Google Drive เพื่อสำรองข้อมูลถาวร'
             }
-            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all flex items-center gap-1.5 cursor-pointer shadow-sm border ${
+            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all flex items-center gap-1.5 cursor-pointer shadow-sm border whitespace-nowrap shrink-0 ${
               isDriveConnected
                 ? 'bg-emerald-950/80 hover:bg-emerald-900 border-emerald-500/50 text-emerald-300'
                 : 'bg-slate-900 hover:bg-slate-800 border-cyan-500/40 text-cyan-300'
@@ -358,34 +437,34 @@ export const Header: React.FC<HeaderProps> = ({
           >
             <Cloud className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">
-              {isDriveConnected ? 'Google Drive (ซิงค์แล้ว)' : 'Google Drive สำรองข้อมูล'}
+              {isDriveConnected ? 'Google Drive (เชื่อมต่อแล้ว)' : 'Google Drive สำรองข้อมูล'}
             </span>
             <span className="sm:hidden">Drive</span>
             <span
               className={`w-2 h-2 rounded-full ${
-                isDriveConnected ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'
+                isDriveConnected ? 'bg-emerald-400' : 'bg-slate-500'
               }`}
-            ></span>
+            />
           </button>
 
           <button
             onClick={onResetData}
             title="รีเซ็ตเป็นข้อมูลมาตรฐาน (Reset to Default)"
-            className="p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-800/70 border border-slate-800 rounded-lg transition-colors cursor-pointer"
+            className="p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-800/70 border border-slate-800 rounded-lg transition-colors cursor-pointer shrink-0"
           >
             <RotateCcw className="w-4 h-4" />
           </button>
           <button
             onClick={handlePrint}
             title="พิมพ์รายงาน (Print / Save PDF)"
-            className="px-3 py-1.5 text-xs font-medium text-slate-300 hover:text-white bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer"
+            className="px-3 py-1.5 text-xs font-medium text-slate-300 hover:text-white bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
           >
             <Printer className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">Print Report</span>
           </button>
           <button
             onClick={onOpenExport}
-            className="px-3.5 py-1.5 text-xs font-semibold text-slate-950 bg-cyan-400 hover:bg-cyan-300 rounded-lg transition-all shadow-sm flex items-center gap-1.5 cursor-pointer"
+            className="px-3.5 py-1.5 text-xs font-semibold text-slate-950 bg-cyan-400 hover:bg-cyan-300 rounded-lg transition-all shadow-sm flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
           >
             <Download className="w-3.5 h-3.5" />
             <span>Export Excel</span>

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   StationData,
   IndirectLaborRole,
@@ -13,10 +13,12 @@ import {
   LineData,
   LineId,
   LineSummaryMetrics,
+  VsmNodeConfig,
 } from './types/manpower';
 import {
   INITIAL_LINES,
   INITIAL_PLAN_VS_ACTUAL_RECORDS,
+  INITIAL_VSM_CONFIGS,
 } from './data/initialData';
 import {
   calculateLineSummary,
@@ -26,6 +28,7 @@ import {
 import { Header, ActiveTab } from './components/Header';
 import { SummaryDashboardTab } from './components/SummaryDashboardTab';
 import { ManpowerSummaryView } from './components/ManpowerSummaryView';
+import { VsmSupplyChainTab } from './components/VsmSupplyChainTab';
 import { MasterSheetTab } from './components/MasterSheetTab';
 import { MonthlyForecastTab } from './components/MonthlyForecastTab';
 import { PlanVsActualTab } from './components/PlanVsActualTab';
@@ -35,20 +38,29 @@ import { ExportModal } from './components/ExportModal';
 import { GoogleDriveBackupModal } from './components/GoogleDriveBackupModal';
 import { User } from 'firebase/auth';
 import { initAuth, getAccessToken } from './services/googleAuth';
-import { createDriveBackup } from './services/googleDriveService';
+import { upsertMasterDriveBackup } from './services/googleDriveService';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
   const [activeLineId, setActiveLineId] = useState<LineId>('line-b');
   const [isExportOpen, setIsExportOpen] = useState(false);
   const [isDriveModalOpen, setIsDriveModalOpen] = useState(false);
+  const [confirmResetOpen, setConfirmResetOpen] = useState(false);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [autoSaveEnabled, setAutoSaveEnabled] = useState<boolean>(() => {
-    return localStorage.getItem('ie_drive_autosave') !== 'false';
+    return localStorage.getItem('ie_drive_autosave') === 'true';
+  });
+  const [autoSaveEdits, setAutoSaveEdits] = useState<boolean>(() => {
+    return localStorage.getItem('ie_autosave_edits') !== 'false';
+  });
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'unsaved' | 'error'>('saved');
+  const [lastLocalSavedTime, setLastLocalSavedTime] = useState<string | null>(() => {
+    return localStorage.getItem('ie_last_local_saved') || null;
   });
   const [lastSyncedTime, setLastSyncedTime] = useState<string | null>(() => {
     return localStorage.getItem('ie_drive_last_synced') || null;
   });
+  const isInitialMountRef = useRef(true);
 
   // Track Google Auth on app load
   useEffect(() => {
@@ -68,10 +80,20 @@ export default function App() {
   }, [autoSaveEnabled]);
 
   useEffect(() => {
+    localStorage.setItem('ie_autosave_edits', String(autoSaveEdits));
+  }, [autoSaveEdits]);
+
+  useEffect(() => {
     if (lastSyncedTime) {
       localStorage.setItem('ie_drive_last_synced', lastSyncedTime);
     }
   }, [lastSyncedTime]);
+
+  useEffect(() => {
+    if (lastLocalSavedTime) {
+      localStorage.setItem('ie_last_local_saved', lastLocalSavedTime);
+    }
+  }, [lastLocalSavedTime]);
 
   // All 7 process lines package (Line A, Line B, Door A, Door B, Door C, Injection Inhouse, Thermoforming)
   const [lines, setLines] = useState<Record<string, LineData>>(() => {
@@ -101,14 +123,21 @@ export default function App() {
     return INITIAL_PLAN_VS_ACTUAL_RECORDS;
   });
 
-  // Persist state to LocalStorage
-  useEffect(() => {
-    localStorage.setItem('ie_multilines_v4', JSON.stringify(lines));
-  }, [lines]);
-
-  useEffect(() => {
-    localStorage.setItem('ie_pva_records_v4', JSON.stringify(planVsActualRecords));
-  }, [planVsActualRecords]);
+  // VSM Supply Synchronization Plan across TF, Injection, Door A/B/C -> Line A & B
+  const [vsmPlan, setVsmPlan] = useState<VsmNodeConfig[]>(() => {
+    const saved = localStorage.getItem('ie_vsm_plan_v4');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    return INITIAL_VSM_CONFIGS;
+  });
 
   // Current active line object
   const currentLine = lines[activeLineId] || lines['line-b'] || Object.values(lines)[0];
@@ -235,55 +264,139 @@ export default function App() {
     });
   };
 
-  // Explicit Save All trigger (Local storage + Google Drive Auto-Sync)
-  const handleSaveAll = async () => {
+  // Unified Auto-Save Edits Effect (LocalStorage immediate + debounced Drive Master sync when opted in)
+  useEffect(() => {
+    if (isInitialMountRef.current) {
+      isInitialMountRef.current = false;
+      return;
+    }
+
+    if (!autoSaveEdits) {
+      setSaveStatus('unsaved');
+      return;
+    }
+
     localStorage.setItem('ie_multilines_v4', JSON.stringify(lines));
     localStorage.setItem('ie_pva_records_v4', JSON.stringify(planVsActualRecords));
+    localStorage.setItem('ie_vsm_plan_v4', JSON.stringify(vsmPlan));
+    const localTimeStr = new Date().toLocaleTimeString('th-TH', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    setLastLocalSavedTime(localTimeStr);
 
-    // If Google Drive auto-save is enabled and user is logged in, perform background master update
+    if (autoSaveEnabled && currentUser) {
+      setSaveStatus('saving');
+      const timer = setTimeout(async () => {
+        try {
+          const token = await getAccessToken();
+          if (!token) {
+            setSaveStatus('saved');
+            return;
+          }
+          const payload = {
+            app: 'IE Manpower Master & Capacity Planner',
+            version: '4.1.0',
+            exportedAt: new Date().toISOString(),
+            exportedBy: currentUser.email || 'Anonymous',
+            lineCount: Object.keys(lines).length,
+            lines,
+            planVsActualRecords,
+            vsmPlan,
+            summaryInfo: {
+              totalDl: plantSummary.totalPlantDl,
+              totalIdl: plantSummary.totalPlantIdl,
+              grandTotalMp: plantSummary.grandPlantTotalMp,
+            },
+            notes: 'Auto-saved edits from IE Manpower & VSM',
+          };
+          await upsertMasterDriveBackup(payload, 'IE_Manpower_Master.json');
+          const syncStr = new Date().toLocaleTimeString('th-TH');
+          setLastSyncedTime(syncStr);
+          setSaveStatus('saved');
+        } catch (err) {
+          console.warn('Auto-save to Google Drive skipped or failed:', err);
+          setSaveStatus('error');
+        }
+      }, 2500);
+      return () => clearTimeout(timer);
+    }
+
+    setSaveStatus('saved');
+  }, [lines, planVsActualRecords, vsmPlan, autoSaveEdits, autoSaveEnabled, currentUser, plantSummary]);
+
+  // Explicit Save All trigger (Local storage + Google Drive Master upsert)
+  const handleSaveAll = async () => {
+    setSaveStatus('saving');
+    localStorage.setItem('ie_multilines_v4', JSON.stringify(lines));
+    localStorage.setItem('ie_pva_records_v4', JSON.stringify(planVsActualRecords));
+    localStorage.setItem('ie_vsm_plan_v4', JSON.stringify(vsmPlan));
+    const localTimeStr = new Date().toLocaleTimeString('th-TH', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    setLastLocalSavedTime(localTimeStr);
+
     if (autoSaveEnabled && currentUser) {
       try {
         const token = await getAccessToken();
         if (token) {
           const payload = {
             app: 'IE Manpower Master & Capacity Planner',
-            version: '4.0.0',
+            version: '4.1.0',
             exportedAt: new Date().toISOString(),
             exportedBy: currentUser.email || 'Anonymous',
             lineCount: Object.keys(lines).length,
             lines,
             planVsActualRecords,
+            vsmPlan,
             summaryInfo: {
               totalDl: plantSummary.totalPlantDl,
               totalIdl: plantSummary.totalPlantIdl,
               grandTotalMp: plantSummary.grandPlantTotalMp,
             },
-            notes: 'Auto-sync from Save Changes',
+            notes: 'Manual save & Master sync',
           };
-          await createDriveBackup(payload, 'IE_Manpower_Master.json');
+          await upsertMasterDriveBackup(payload, 'IE_Manpower_Master.json');
           const nowStr = new Date().toLocaleTimeString('th-TH');
           setLastSyncedTime(nowStr);
         }
+        setSaveStatus('saved');
       } catch (err) {
-        console.warn('Auto-save to Google Drive skipped or failed:', err);
+        console.warn('Save to Google Drive failed:', err);
+        setSaveStatus('error');
       }
+    } else {
+      setSaveStatus('saved');
     }
   };
 
+  const handleToggleAutoSaveEdits = () => {
+    setAutoSaveEdits((prev) => {
+      const next = !prev;
+      if (next && saveStatus === 'unsaved') {
+        setTimeout(() => {
+          handleSaveAll();
+        }, 0);
+      }
+      return next;
+    });
+  };
+
   // Reset to default dataset
-  const handleResetData = () => {
-    if (
-      window.confirm(
-        'ต้องการรีเซ็ตข้อมูลทั้ง 7 Process Lines (Line A, B, Door A, B, C, Injection, Thermoforming) เป็นค่ามาตรฐาน IE หรือไม่?'
-      )
-    ) {
-      setLines(INITIAL_LINES);
-      setPlanVsActualRecords(INITIAL_PLAN_VS_ACTUAL_RECORDS);
-      localStorage.removeItem('ie_multilines_v4');
-      localStorage.removeItem('ie_multilines_v3');
-      localStorage.removeItem('ie_pva_records_v4');
-      localStorage.removeItem('ie_pva_records_v3');
-    }
+  const handleConfirmResetData = () => {
+    setLines(INITIAL_LINES);
+    setPlanVsActualRecords(INITIAL_PLAN_VS_ACTUAL_RECORDS);
+    setVsmPlan(INITIAL_VSM_CONFIGS);
+    localStorage.removeItem('ie_multilines_v4');
+    localStorage.removeItem('ie_multilines_v3');
+    localStorage.removeItem('ie_pva_records_v4');
+    localStorage.removeItem('ie_pva_records_v3');
+    localStorage.removeItem('ie_vsm_plan_v4');
+    setSaveStatus('saved');
+    setConfirmResetOpen(false);
   };
 
   // Switch line from Dashboard or Summary
@@ -307,7 +420,12 @@ export default function App() {
         onOpenGoogleDrive={() => setIsDriveModalOpen(true)}
         isDriveConnected={!!currentUser}
         userEmail={currentUser?.email}
-        onResetData={handleResetData}
+        onResetData={() => setConfirmResetOpen(true)}
+        autoSaveEdits={autoSaveEdits}
+        onToggleAutoSaveEdits={handleToggleAutoSaveEdits}
+        saveStatus={saveStatus}
+        lastSavedTime={lastLocalSavedTime}
+        onManualSave={handleSaveAll}
         lines={lines}
         lineSummaries={allLineSummaries}
         lineAName={lines['line-a']?.name || 'Line A'}
@@ -356,6 +474,20 @@ export default function App() {
             lines={lines}
             plantSummary={plantSummary}
             onSelectLine={(lineId, targetTab) => {
+              setActiveLineId(lineId);
+              setActiveTab(targetTab || 'master');
+            }}
+          />
+        )}
+
+        {/* 2.5 Value Stream Mapping (VSM) & Supply Synchronization Sheet */}
+        {activeTab === 'vsm' && (
+          <VsmSupplyChainTab
+            lines={lines}
+            setLines={setLines}
+            vsmConfigs={vsmPlan}
+            setVsmConfigs={setVsmPlan}
+            onNavigateToLine={(lineId, targetTab) => {
               setActiveLineId(lineId);
               setActiveTab(targetTab || 'master');
             }}
@@ -436,6 +568,8 @@ export default function App() {
         setLines={setLines}
         planVsActualRecords={planVsActualRecords}
         setPlanVsActualRecords={setPlanVsActualRecords}
+        vsmPlan={vsmPlan}
+        setVsmPlan={setVsmPlan}
         plantSummary={plantSummary}
         currentUser={currentUser}
         setCurrentUser={setCurrentUser}
@@ -444,6 +578,34 @@ export default function App() {
         lastSyncedTime={lastSyncedTime}
         setLastSyncedTime={setLastSyncedTime}
       />
+
+      {/* Reset Confirmation Modal */}
+      {confirmResetOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-amber-500/40 rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4">
+            <h3 className="text-base font-bold text-white">
+              ยืนยันการรีเซ็ตข้อมูลมาตรฐาน IE (Reset to Default)
+            </h3>
+            <p className="text-xs text-slate-300 leading-relaxed">
+              ต้องการรีเซ็ตข้อมูลทั้ง 7 Process Lines (Line A, B, Door A, B, C, Injection, Thermoforming), Plan vs Actual และแผน VSM กลับเป็นค่ามาตรฐาน IE หรือไม่?
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                onClick={() => setConfirmResetOpen(false)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer"
+              >
+                ยกเลิก
+              </button>
+              <button
+                onClick={handleConfirmResetData}
+                className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl text-xs font-bold cursor-pointer"
+              >
+                ยืนยันรีเซ็ตข้อมูล
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Footer */}
       <footer className="border-t border-slate-900 py-4 px-4 lg:px-8 text-center text-xs text-slate-500 no-print mt-auto">

@@ -177,3 +177,70 @@ export interface PlantSummaryMetrics {
   lineASummary: LineSummaryMetrics;
   lineBSummary: LineSummaryMetrics;
 }
+
+export type VsmNodeRole = 'upstream_parts' | 'sub_assembly_door' | 'main_assembly';
+
+export interface VsmNodeConfig {
+  lineId: LineId;
+  role: VsmNodeRole;
+  partName: string;
+  feedsInto: LineId[];
+  bomPerLineAUnit: number;
+  bomPerLineBUnit: number;
+  allocationLineAPct: number;
+  allocationLineBPct: number;
+  shiftsPerDay: 1 | 2 | 3;
+  otHoursPerDay: number;
+  changeoverMinsPerDay: number;
+  transferLeadTimeMins: number;
+  initialBufferStock: number;
+  safetyBufferHours: number;
+  headStartHours: number;
+  lotSize: number;
+}
+
+export type VsmDeliveryStatus = 'ON_TIME' | 'AT_RISK' | 'LATE_SHORTAGE';
+
+export interface VsmHourlyPoint {
+  hourIndex: number;       // 0..23 starting at 08:00
+  clockLabel: string;      // '08:00', '09:00', ...
+  supplyUnits: number;     // Units arriving to downstream supermarket this hour
+  demandUnits: number;     // Units consumed by Line A + Line B this hour
+  cumSupply: number;
+  cumDemand: number;
+  bufferEnd: number;       // Ending supermarket buffer at this hour
+}
+
+export interface VsmNodeEvaluation {
+  config: VsmNodeConfig;
+  lineName: string;
+  shortCode: string;
+  color: string;
+  grossUph: number;
+  oeePct: number;
+  netUph: number;
+  operatingHoursPerDay: number;
+  netProductionHoursPerDay: number;
+  dailyCapacityUnits: number;
+  demandRateLineAPerHr: number;
+  demandRateLineBPerHr: number;
+  totalDemandRatePerHr: number;
+  dailyDemandLineA: number;
+  dailyDemandLineB: number;
+  totalDailyDemand: number;
+  hourlyBalance: number;         // netUph - totalDemandRatePerHr
+  dailyBalance: number;          // dailyCapacityUnits - totalDailyDemand
+  endingBufferUnits: number;
+  minBufferUnits: number;
+  safetyBufferUnits: number;
+  firstShortageClock: string | null;
+  firstShortageHour: number | null;
+  bufferCoverageHours: number;
+  cycleTimeSec: number;
+  taktTimeSec: number;
+  status: VsmDeliveryStatus;
+  statusReason: string;
+  recommendedAction: string;
+  hourlyTimeline: VsmHourlyPoint[];
+}
+
